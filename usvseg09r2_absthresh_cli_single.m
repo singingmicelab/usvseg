@@ -1,4 +1,9 @@
-function varargout = usvseg09r2_absthresh(action)
+function usvseg09r2_absthresh_cli_single(audio_filepath, params_filepath, output_filepath)
+% 
+% usvseg09r2_absthresh_cli_single
+% Command line version of usvseg Long File with absolute threshold value
+% 231007
+%
 % usvseg09r2_absthresh
 % use an absolute threshold value, instead of multiplier of noise SD
 % this will make it more consistent across sessions
@@ -10,887 +15,101 @@ function varargout = usvseg09r2_absthresh(action)
 % by R.O. Tachibana (rtachi@gmail.com)
 % May 23, 2020
 
-% update:
-%   - changed structure of global variable
-%       gv.gui / gv.dat / gv.prm
-%   - output duration is now in milliseconds but not seconds
-%   - added "meanfreq" and "cvfreq" as output feature
-%   - deleted "whitening" and "hanntaperspec" functions for comparison
-%   - parallel computeing (parfor) is now working only for batch processing
-
 % global variable
 global gv;
 
-% Initiation ------------------------------------------------------
-if nargin==0
-    % version
-    usevsegver = 'USVSEG ver 0.9 (rev 2)';
-    fftsize = 512;
-    % load parameters
-    prmfile = [fileparts(mfilename('fullpath')) filesep 'usvseg_prm_absthresh.mat'];
-    if exist(prmfile)==2, l=load(prmfile); gv.prm = l.prm;
-    else % default values
-        prm.timestep = 0.0005; prm.freqmin = 30000; prm.freqmax = 120000;
-        prm.threshval = 4.5;   prm.durmin = 0.005;  prm.durmax = 0.3;
-        prm.gapmin = 0.030;    prm.margin = 0.015;  prm.wavfileoutput = 1;
-        prm.imageoutput = 1;   prm.imagetype = 0;   prm.traceoutput = 0;
-        prm.readsize = 10;     prm.mapL = 1000;     prm.mapH = 6000;
-        gv.prm = prm;
-    end
-    gv.usevsegver = usevsegver;
-    gv.prm.fftsize = fftsize; % FFT size = window size
-    gv.dat.pth = cd;
-    % make GUI
-    makegui;
-    cla(gv.gui.haxes(1)); cla(gv.gui.haxes(2)); cla(gv.gui.haxes(3));
-    return
-end
-% open ----------------------------------------------------------------
-if strcmp(action,'open')
-    % clear axes
-    cla(gv.gui.haxes(1)); cla(gv.gui.haxes(2)); cla(gv.gui.haxes(3));
-    % unable
-    set([gv.gui.hpush_thrs gv.gui.hpush_dtct gv.gui.hpush_save gv.gui.hpush_sgmt gv.gui.hpush_play gv.gui.hpush_swav],'Enable','Off');
-    % fetch parameters from GUI
-    fetchparams;
-    timestep = gv.prm.timestep;
-    readsize = gv.prm.readsize;
-    fftsize = gv.prm.fftsize;
-    % get file
-    [fn,pth] = uigetfile([gv.dat.pth filesep '*.wav']);
-    % show file name
-    set(gv.gui.htext_fnam,'string',['File: ' pth fn]);
-    busytoggle(1);
-    % read wav
-    ai = audioinfo([pth fn]);
-    fs = ai.SampleRate;
-    wav = audioread([pth fn],[1 min(readsize*fs,ai.TotalSamples)]);
-    % show fs
-    set(gv.gui.htext_fsvl,'string',num2str(fs/1000));
-    % multitaper spectrogram
-    step = round(timestep*fs);
-    mtsp = multitaperspec(wav,fs,fftsize,timestep,0);
-    mtsimrng = median(mtsp(:)) + [0 40];
-    fvec = [0; (1:(fftsize/2))'/fftsize*fs];
-    tvec = ((0:(size(mtsp,2)-1))*step+fftsize/2)/fs;
-    % default view range : 2 seconds
-    xl = [0 2];
-    yl = [0 max(fvec)/1000];
-    % save in global variable
-    gv.dat.fn = fn; gv.dat.pth = pth;
-    gv.dat.fs = fs; gv.dat.wav = wav; gv.dat.step = step; 
-    gv.dat.mtsp = mtsp; gv.dat.mtsimrng = mtsimrng;
-    gv.dat.fvec = fvec; gv.dat.tvec = tvec;
-    gv.dat.xl = xl; gv.dat.yl = yl;
-    % draw mtsp
-    drawmtsp;
-    % enable
-    set(gv.gui.hpush_flat,'Enable','On');
-    busytoggle(0);
-    return;
-end
-% flattening ------------------------------------------------------------
-if strcmp(action,'flat')
-    busytoggle(1);
-    % clear axes
-    cla(gv.gui.haxes(2)); cla(gv.gui.haxes(3));
-    % flattening
-    fltnd = flattening(gv.dat.mtsp);
-    fltndimrng = [0 30];
-    % save
-    gv.dat.fltnd = fltnd;
-    gv.dat.fltndimrng = fltndimrng;
-    % draw fltnd
-    drawfltnd;
-    % enable
-    set(gv.gui.hpush_thrs,'Enable','On');
-    busytoggle(0);
-    return;
-end
-% thresholding ------------------------------------------------------------
-if strcmp(action,'thrs')
-    % clear axes
-    cla(gv.gui.haxes(3));
-    % fetch
-    fetchparams;
-    freqmin = gv.prm.freqmin; freqmax = gv.prm.freqmax; threshval = gv.prm.threshval; 
-    fs = gv.dat.fs; fvec = gv.dat.fvec; tvec = gv.dat.tvec; fltnd = gv.dat.fltnd;
-    busytoggle(1);    
-%     % threshold calculation with threshval*sigma (SD) of background noise 
-%     thresh = estimatethresh(fltnd,fs,freqmin,freqmax,threshval);
-    % use an absolute threshold value, so can be consistent across sessions
-    thresh = threshval;
-    % thresholding
-    thrshd = thresholding(fltnd,fs,freqmin,freqmax,thresh);
-    % draw
-    set(0,'CurrentFigure',gv.gui.hfig);
-    set(gv.gui.hfig,'CurrentAxes',gv.gui.haxes(3));
-    imagesc(tvec,fvec/1000,thrshd); axis xy
-    colormap(gca,gray);
-    set(gca,'tickdir','out'); box off;
-    ylabel('Frequency (kHz)');
-    set(gv.gui.haxes,'xlim',gv.dat.xl,'ylim',gv.dat.yl);
-    drawnow;
-    % enable
-    set(gv.gui.hpush_dtct,'Enable','On');
-    % save
-    gv.dat.thrshd = thrshd; gv.dat.thresh = thresh;
-    busytoggle(0);
-    return;
-end
-% detection ------------------------------------------------------------
-if strcmp(action,'dtct')
-    busytoggle(1);
-    % clear axes
-    cla(gv.gui.haxes(3));   
-    % fetch
-    fetchparams;
-    fs = gv.dat.fs; timestep = gv.prm.timestep;
-    freqmin = gv.prm.freqmin; freqmax = gv.prm.freqmax;
-    durmin = gv.prm.durmin; durmax = gv.prm.durmax;
-    gapmin = gv.prm.gapmin; margin = gv.prm.margin;
-    mtsp = gv.dat.mtsp; fltnd = gv.dat.fltnd; thrshd = gv.dat.thrshd;
-    % onset/offset detection
-    [onoffset,onoffsetm] = detectonoffset(thrshd,fs,timestep,gapmin,durmin,durmax,margin);
-    % peak tracking
-    [freqtrace,amptrace,maxampval,maxampidx,maxfreq,meanfreq,cvfreq] = specpeaktracking(mtsp,fltnd,fs,timestep,freqmin,freqmax,onoffset,margin);
-    % save
-    gv.dat.onoffset = onoffset; gv.dat.onoffsetm = onoffsetm;
-    gv.dat.freqtrace = freqtrace; gv.dat.amptrace = amptrace;
-    gv.dat.maxampval = maxampval; gv.dat.maxfreq = maxfreq; gv.dat.maxampidx = maxampidx;
-    gv.dat.meanfreq = meanfreq; gv.dat.cvfreq = cvfreq;
-    % draw trace
-    drawtrace;
-    % enable
-    set(gv.gui.hpush_save,'Enable','On');
-    set(gv.gui.hpush_sgmt,'Enable','On');
-    set(gv.gui.hpush_play,'Enable','On');
-    busytoggle(0);
-    return;
-end
-% save ----------------------------------------------------------------
-if strcmp(action,'save')
-    busytoggle(0);
-    % fetch
-    onoffset = gv.dat.onoffset;
-    maxampval = gv.dat.maxampval; maxfreq = gv.dat.maxfreq;
-    meanfreq = gv.dat.meanfreq; cvfreq = gv.dat.cvfreq;
+% initialization
+fftsize = 512;
+% load parameters
+prmfile = params_filepath;
+l=load(prmfile); 
+gv.prm = l.prm;
+gv.prm.fftsize = fftsize; % FFT size = window size
+
+% process (adapt from long action)
+% fetch parameter
+timestep = gv.prm.timestep; margin =  gv.prm.margin; durmax = gv.prm.durmax;
+wavflg = gv.prm.wavfileoutput; imgflg = gv.prm.imageoutput;
+fltflg = gv.prm.imagetype; trcflg = gv.prm.traceoutput;
+readsize = gv.prm.readsize; fftsize = gv.prm.fftsize;
+% get long wavfile
+ainfo = audioinfo(audio_filepath);
+wavsize = ainfo.TotalSamples;
+fs = ainfo.SampleRate;
+nreadsize= round(readsize*fs);
+nread = ceil(wavsize/nreadsize);
+fvec = [0; (1:(fftsize/2))'/fftsize*fs];
+step = round(timestep*fs);
+yl = [0 max(fvec)/1000];
+gv.dat.fs = fs;
+gv.dat.yl = yl;
+% CSV setting
+savefp = output_filepath;
+fid = fopen(savefp,'wt');
+fprintf(fid,'#,start,end,duration,maxfreq,maxamp,meanfreq,cvfreq\n');
+fclose(fid);
+% % segmentation setting
+% outp = uigetdir(spth,'output directory');
+% start
+prevn = 0;
+prevlast = 0;
+med = [];
+thresh = [];
+for r=1:nread
+    % read
+    rng = [prevlast+1 min(r*nreadsize,wavsize)];
+    if diff(rng)<fftsize*2, break; end
+    [wav,fs] = audioread(audio_filepath,rng);
+    % process
+    [mtsp,fltnd,onoffset,onoffsetm,freqtrace,amptrace,maxampval,maxampidx,maxfreq,meanfreq,cvfreq,thresh,med,contflg] = procfun(wav,fs,fftsize,gv.prm,med,thresh);
     dur = diff(onoffset,[],2);
-    [~,prefix,~] = fileparts(gv.dat.fn);
+    ronoffset = onoffset+(prevlast+1)/fs;
+    ronoffsetm = onoffsetm+(prevlast+1)/fs;
+    nstep = size(mtsp,2);
+    tvec = ((0:(nstep-1))*step+fftsize/2)/fs;
+    rtvec = tvec+(prevlast+1)/fs;
+    mtsimrng = median(mtsp(:)) + [0 40];
+    fltndimrng = [0 30];
+    % save to global 
+    gv.dat.tvec = rtvec; gv.dat.fvec = fvec; gv.dat.mtsp = mtsp; gv.dat.fltnd = fltnd;
+    gv.dat.onoffset = ronoffset; gv.dat.onoffsetm = ronoffsetm;
+    gv.dat.freqtrace = freqtrace; gv.dat.amptrace = amptrace;
+    gv.dat.maxampval = maxampval; gv.dat.maxampidx = maxampidx; gv.dat.maxfreq = maxfreq;
+    gv.dat.meanfreq = meanfreq; gv.dat.cvfreq = cvfreq;
+    gv.dat.mtsimrng = mtsimrng; gv.dat.fltndimrng = fltndimrng;
+    gv.dat.xl = [min(rtvec) max(rtvec)];
     % save CSV
-    [fn,pth] = uiputfile([gv.dat.pth filesep prefix '_dat.csv'],'file name');
-    fid = fopen([pth fn],'wt');
-    fprintf(fid,'#,start,end,duration,maxfreq,maxamp,meanfreq,cvfreq\n');
-    if ~isempty(onoffset)
-        for n=1:size(onoffset,1)
-            fprintf(fid,'%d,%.04f,%.04f,%.1f,%.03f,%.02f,%.03f,%.04f\n',n,onoffset(n,1),onoffset(n,2),dur(n)*1000,maxfreq(n)/1000,maxampval(n),meanfreq(n)/1000,cvfreq(n));
+    fid = fopen(savefp,'at');
+    if ~isempty(ronoffset)
+        for n=1:size(ronoffset,1)
+            fprintf(fid,'%d,%.04f,%.04f,%.1f,%.03f,%.02f,%.03f,%.04f\n',n+prevn,ronoffset(n,1),ronoffset(n,2),dur(n)*1000,maxfreq(n)/1000,maxampval(n),meanfreq(n)/1000,cvfreq(n));
         end
     end
     fclose(fid);
-    busytoggle(1);
-    return;
-end
-% segment -------------------------------------------------------------
-if strcmp(action,'sgmt')
-    busytoggle(0);
-    % fetch
-    fetchparams;
-    margin = gv.prm.margin; timestep = gv.prm.timestep;
-    wavflg = gv.prm.wavfileoutput; imgflg = gv.prm.imageoutput; 
-    fltflg = gv.prm.imagetype; trcflg = gv.prm.traceoutput;
-    wav = gv.dat.wav; fs = gv.dat.fs; mtsp = gv.dat.mtsp; fltnd = gv.dat.fltnd;
-    tvec = gv.dat.tvec; onoffset = gv.dat.onoffset;
-    freqtrace = gv.dat.freqtrace;amptrace = gv.dat.amptrace;
-    fltndimrng = gv.dat.fltndimrng; mtsimrng = gv.dat.mtsimrng;
-    % file name
-    [~,prefix,~] = fileparts(gv.dat.fn);
-    outp = uigetdir(gv.dat.pth);
-    % output
-    startid = 1;
-    if fltflg==1, inputimg = fltnd; imrng = fltndimrng;
-    else,         inputimg = mtsp;   imrng = mtsimrng; end
-    segfun(startid,outp,prefix,inputimg,imrng,wav,fs,timestep,margin,onoffset,tvec,amptrace,freqtrace,wavflg,imgflg,trcflg);
-    busytoggle(0);
-    return;
-end
-% play  ----------------------------------------------------------------
-if strcmp(action,'play')
-    playfs = 44100;
-    % fetch
-    fetchparams;
-    mapL = gv.prm.mapL; mapH = gv.prm.mapH;
-    fs = gv.dat.fs; tvec = gv.dat.tvec;
-    freqtrace = gv.dat.freqtrace; amptrace = gv.dat.amptrace;
-    % audible sound synthesis
-    synthsnd = soundsynthesis(freqtrace(:,1),amptrace(:,1),tvec,fs,playfs,[mapL mapH]);
-    % get range
-    rng = max(1,round(gv.dat.xl(1)*playfs)):min(length(synthsnd),round(gv.dat.xl(2)*playfs));
-    % play
-    ap = audioplayer(synthsnd(rng),playfs);
-    playblocking(ap);
-    delete(ap);
-    set(gv.gui.hpush_swav,'Enable','On');
-    % save
-    gv.dat.playfs = playfs;
-    gv.dat.synthsnd = synthsnd;
-    return;
-end
-% save wav  ----------------------------------------------------------------
-if strcmp(action,'swav')
-    newfn = [gv.dat.fn(1:end-4) '_syn.wav'];
-    [f,p] = uiputfile([gv.dat.pth newfn]);
-    audiowrite([p f],gv.dat.synthsnd,gv.dat.playfs);
-    return;
-end
-% long ----------------------------------------------------------------
-if strcmp(action,'long')
-    % fetch parameter
-    fetchparams;
-    timestep = gv.prm.timestep; margin =  gv.prm.margin; durmax = gv.prm.durmax;
-    wavflg = gv.prm.wavfileoutput; imgflg = gv.prm.imageoutput;
-    fltflg = gv.prm.imagetype; trcflg = gv.prm.traceoutput;
-    readsize = gv.prm.readsize; fftsize = gv.prm.fftsize;
-    % clear axes
-    cla(gv.gui.haxes(1)); cla(gv.gui.haxes(2)); cla(gv.gui.haxes(3));
-    % disable
-    set(gv.gui.hpush_open,'enable','on');
-    set(gv.gui.hpush_dtct,'enable','off');
-    set(gv.gui.hpush_save,'enable','off');
-    set(gv.gui.hpush_sgmt,'enable','off');
-    set(gv.gui.hpush_long,'enable','on');
-    % get long wavfile
-    busytoggle(1);
-    [fn,pth] = uigetfile([gv.dat.pth filesep '*.wav']);
-    fp = [pth fn];
-    ainfo = audioinfo(fp);
-    wavsize = ainfo.TotalSamples;
-    fs = ainfo.SampleRate;
-    nreadsize= round(readsize*fs);
-    nread = ceil(wavsize/nreadsize);
-    fvec = [0; (1:(fftsize/2))'/fftsize*fs];
-    step = round(timestep*fs);
-    yl = [0 max(fvec)/1000];
-    gv.dat.fs = fs;
-    gv.dat.yl = yl;
-    % show fs
-    set(gv.gui.htext_fsvl,'string',num2str(fs/1000));
-    % CSV setting
-    [~,prefix,~] = fileparts(fn);
-    [sfn,spth] = uiputfile([pth filesep prefix '_dat.csv'],'save file name');
-    savefp = [spth sfn];
-    fid = fopen(savefp,'wt');
-    fprintf(fid,'#,start,end,duration,maxfreq,maxamp,meanfreq,cvfreq\n');
-    fclose(fid);
-    % segmentation setting
-    outp = uigetdir(spth,'output directory');
-    % start
-    prevn = 0;
-    prevlast = 0;
-    med = [];
-    thresh = [];
-    for r=1:nread
-        set(gv.gui.htext_fnam,'string',['File: ' fp ' ...  (' num2str(r) '/' num2str(nread) ' blocks)']);
-        busytoggle(1);
-        % read
-        rng = [prevlast+1 min(r*nreadsize,wavsize)];
-        if diff(rng)<fftsize*2, break; end
-        [wav,fs] = audioread(fp,rng);
-        % process
-        [mtsp,fltnd,onoffset,onoffsetm,freqtrace,amptrace,maxampval,maxampidx,maxfreq,meanfreq,cvfreq,thresh,med,contflg] = procfun(wav,fs,fftsize,gv.prm,med,thresh);
-        busytoggle(0);
-        dur = diff(onoffset,[],2);
-        ronoffset = onoffset+(prevlast+1)/fs;
-        ronoffsetm = onoffsetm+(prevlast+1)/fs;
-        nstep = size(mtsp,2);
-        tvec = ((0:(nstep-1))*step+fftsize/2)/fs;
-        rtvec = tvec+(prevlast+1)/fs;
-        mtsimrng = median(mtsp(:)) + [0 40];
-        fltndimrng = [0 30];
-        % save to global 
-        gv.dat.tvec = rtvec; gv.dat.fvec = fvec; gv.dat.mtsp = mtsp; gv.dat.fltnd = fltnd;
-        gv.dat.onoffset = ronoffset; gv.dat.onoffsetm = ronoffsetm;
-        gv.dat.freqtrace = freqtrace; gv.dat.amptrace = amptrace;
-        gv.dat.maxampval = maxampval; gv.dat.maxampidx = maxampidx; gv.dat.maxfreq = maxfreq;
-        gv.dat.meanfreq = meanfreq; gv.dat.cvfreq = cvfreq;
-        gv.dat.mtsimrng = mtsimrng; gv.dat.fltndimrng = fltndimrng;
-        gv.dat.xl = [min(rtvec) max(rtvec)];
-        % draw MTSP
-        drawmtsp;
-        % draw Flattened
-        drawfltnd;
-        % draw trace
-        drawtrace;
-        % save CSV
-        fid = fopen(savefp,'at');
-        if ~isempty(ronoffset)
-            for n=1:size(ronoffset,1)
-                fprintf(fid,'%d,%.04f,%.04f,%.1f,%.03f,%.02f,%.03f,%.04f\n',n+prevn,ronoffset(n,1),ronoffset(n,2),dur(n)*1000,maxfreq(n)/1000,maxampval(n),meanfreq(n)/1000,cvfreq(n));
-            end
-        end
-        fclose(fid);
-        % segmentation
-        if fltflg==1, inputimg = fltnd; imrng = fltndimrng;
-        else,         inputimg = mtsp;   imrng = mtsimrng; end
-        segfun(prevn+1,outp,prefix,inputimg,imrng,wav,fs,timestep,margin,onoffset,rtvec,amptrace,freqtrace,wavflg,imgflg,trcflg)
-        % calc
-        prevn = size(onoffset,1)+prevn;
-        if contflg==1
-            if isempty(onoffset)
-                prevlast = rng(2) - durmax * fs;
-            else
-                prevlast = round(onoffset(end,2)*fs)+prevlast;
-            end
+%     % segmentation
+%     if fltflg==1, inputimg = fltnd; imrng = fltndimrng;
+%     else,         inputimg = mtsp;   imrng = mtsimrng; end
+%     segfun(prevn+1,outp,prefix,inputimg,imrng,wav,fs,timestep,margin,onoffset,rtvec,amptrace,freqtrace,wavflg,imgflg,trcflg)
+    % calc
+    prevn = size(onoffset,1)+prevn;
+    if contflg==1
+        if isempty(onoffset)
+            prevlast = rng(2) - durmax * fs;
         else
-            prevlast = rng(2);
-        end        
-    end
-    msgbox('Done!');
-    return;
-end
-% folder (multiple files) ----------------------------------------------------------------
-if strcmp(action,'fldr')
-    set(gv.gui.htext_fnam,'string','');
-    % clear axes
-    cla(gv.gui.haxes(1)); cla(gv.gui.haxes(2)); cla(gv.gui.haxes(3));
-    % disable
-    set(gv.gui.hpush_open,'enable','on');
-    set(gv.gui.hpush_dtct,'enable','off');
-    set(gv.gui.hpush_save,'enable','off');
-    set(gv.gui.hpush_sgmt,'enable','off');
-    set(gv.gui.hpush_long,'enable','on');
-    % fetch parameters
-    fetchparams;
-    timestep = gv.prm.timestep; margin =  gv.prm.margin; durmax = gv.prm.durmax;
-    wavflg = gv.prm.wavfileoutput; imgflg = gv.prm.imageoutput;
-    fltflg = gv.prm.imagetype; trcflg = gv.prm.traceoutput;
-    readsize = gv.prm.readsize; fftsize = gv.prm.fftsize;
-    % get reading path and files
-    pth = uigetdir(gv.dat.pth);
-    gv.dat.pth = pth;
-    d = dir([pth filesep '*.wav']);
-    fns = {d.name};
-    nfile = length(fns);
-    for f=1:nfile
-        % get wavfile
-        fp = [pth filesep fns{f}];
-        ainfo = audioinfo(fp);
-        wavsize = ainfo.TotalSamples;
-        fs = ainfo.SampleRate;
-        nreadsize= round(readsize*fs);
-        nread = ceil(wavsize/nreadsize);
-        fvec = [0; (1:(fftsize/2))'/fftsize*fs];
-        step = round(timestep*fs);
-        yl = [0 max(fvec)/1000];
-        gv.dat.fs = fs;
-        gv.dat.yl = yl;
-        % show fs
-        set(gv.gui.htext_fsvl,'string',num2str(fs/1000));
-        % CSV setting
-        [~,prefix,~] = fileparts(fns{f});
-        sfn = [prefix '_dat.csv'];
-        savefp = [pth filesep sfn];
-        fid = fopen(savefp,'wt');
-        fprintf(fid,'#,start,end,duration,maxfreq,maxamp,meanfreq,cvfreq\n');
-        fclose(fid);
-        % segmentation setting
-        mkdir(pth,prefix);
-        outp = [pth filesep prefix];
-        % start
-        prevn = 0;
-        prevlast = 0;
-        med = [];
-        thresh = [];
-        for r=1:nread
-            % read
-            set(gv.gui.htext_fnam,'string',sprintf('File: %s  ... (%d/%d blocks) [%d/%d files]',fp,r,nread,f,nfile));
-            busytoggle(1);
-            rng = [prevlast+1 min(r*nreadsize,wavsize)];
-            if diff(rng)<fftsize*2, break; end
-            [wav,fs] = audioread(fp,rng);
-            % process
-            [mtsp,fltnd,onoffset,onoffsetm,freqtrace,amptrace,maxampval,maxampidx,maxfreq,meanfreq,cvfreq,thresh,med,contflg] = procfun(wav,fs,fftsize,gv.prm,med,thresh);
-            dur = diff(onoffset,[],2);
-            ronoffset = onoffset+(prevlast+1)/fs;
-            ronoffsetm = onoffsetm+(prevlast+1)/fs;
-            nstep = size(mtsp,2);
-            tvec = ((0:(nstep-1))*step+fftsize/2)/fs;
-            rtvec = tvec+(prevlast+1)/fs;
-            mtsimrng = median(mtsp(:)) + [0 40];
-            fltndimrng = [0 30];
-            busytoggle(0);
-            % save to global 
-            gv.dat.tvec = rtvec; gv.dat.fvec = fvec; gv.dat.mtsp = mtsp; gv.dat.fltnd = fltnd;
-            gv.dat.onoffset = ronoffset; gv.dat.onoffsetm = ronoffsetm;
-            gv.dat.freqtrace = freqtrace; gv.dat.amptrace = amptrace;
-            gv.dat.maxampval = maxampval; gv.dat.maxampidx = maxampidx; gv.dat.maxfreq = maxfreq;
-            gv.dat.meanfreq = meanfreq; gv.dat.cvfreq = cvfreq;
-            gv.dat.mtsimrng = mtsimrng; gv.dat.fltndimrng = fltndimrng;
-            gv.dat.xl = [min(rtvec) max(rtvec)];
-            % draw MTSP
-            drawmtsp;
-            % draw Flattened
-            drawfltnd;
-            % draw trace
-            drawtrace;
-            % save CSV
-            fid = fopen(savefp,'at');
-            if ~isempty(ronoffset)
-                for n=1:size(ronoffset,1)
-                    fprintf(fid,'%d,%.04f,%.04f,%.1f,%.03f,%.02f,%.03f,%.04f\n',n+prevn,ronoffset(n,1),ronoffset(n,2),dur(n)*1000,maxfreq(n)/1000,maxampval(n),meanfreq(n)/1000,cvfreq(n));
-                end
-            end
-            fclose(fid);
-            % segmentation
-            if fltflg==1, inputimg = fltnd; imrng = fltndimrng;
-            else,         inputimg = mtsp;   imrng = mtsimrng; end
-            segfun(prevn+1,outp,prefix,inputimg,imrng,wav,fs,timestep,margin,onoffset,rtvec,amptrace,freqtrace,wavflg,imgflg,trcflg);
-            % calc
-            prevn = size(onoffset,1)+prevn;
-            if contflg==1
-                if isempty(onoffset)
-                    prevlast = rng(2) - durmax * fs;
-                else
-                    prevlast = round(onoffset(end,2)*fs)+prevlast;
-                end
-            else
-                prevlast = rng(2);
-            end        
+            prevlast = round(onoffset(end,2)*fs)+prevlast;
         end
-    end
-    msgbox('Done!');
-    return;
+    else
+        prevlast = rng(2);
+    end        
 end
-% zoom  -----------------------------------------------------
-if strcmp(action,'z')
-    set(gcf,'Pointer','crosshair')
-    waitforbuttonpress;
-    p1 = get(gca,'currentpoint');
-    rbbox;
-    p2 = get(gca,'currentpoint');
-    newxl = sort([p1(1,1) p2(1,1)]);
-    newyl = sort([p1(1,2) p2(1,2)]);
-    set(gcf,'Pointer','arrow')
-    gv.dat.xl = newxl;
-    gv.dat.yl = newyl;
-    set([gv.gui.haxes],'xlim',gv.dat.xl,'ylim',gv.dat.yl);
-    return;
-end
-% zoom in -----------------------------------------------------
-if strcmp(action,'i')
-    xl = get(gca,'XLim');
-    center = xl(1)+diff(xl)/2;
-    newxl = center + [-diff(xl)/2 diff(xl)/2]*0.75;
-    gv.dat.xl = newxl;
-    set([gv.gui.haxes],'xlim',gv.dat.xl);
-    return;
-end
-% zoom out -----------------------------------------------------
-if strcmp(action,'o')
-    xl = get(gca,'XLim');
-    center = xl(1)+diff(xl)/2;
-    newxl = center + [-diff(xl)/2 diff(xl)/2]*1.25;
-    gv.dat.xl = newxl;
-    set([gv.gui.haxes],'xlim',gv.dat.xl);
-    return;
-end
-% zoom in veritcal --------------------------------------------------
-if strcmp(action,'u')
-    yl = get(gca,'ylim');
-    center = yl(1)+diff(yl)/2;
-    newyl = center + [-diff(yl)/2 diff(yl)/2]*0.75;
-    gv.dat.yl = newyl;
-    set([gv.gui.haxes],'ylim',gv.dat.yl);
-    return;
-end
-% zoom out vertical ---------------------------------------------------
-if strcmp(action,'j')
-    yl = get(gca,'ylim');
-    center = yl(1)+diff(yl)/2;
-    newyl = center + [-diff(yl)/2 diff(yl)/2]*1.25;
-    gv.dat.yl = newyl;
-    set([gv.gui.haxes],'ylim',gv.dat.yl);
-    return;
-end
-% slide forward ----------------------------------------------
-if double(action)==29 % ->
-    xl = get(gca,'xlim');
-    newxl = xl+diff(xl)*0.05;
-    gv.dat.xl = newxl;
-    set([gv.gui.haxes],'xlim',gv.dat.xl);
-    return;
-end
-% slide back --------------------------------------------------
-if double(action)==28 % <-
-    xl = get(gca,'xlim');
-    newxl = xl-diff(xl)*0.05;
-    gv.dat.xl = newxl;
-    set([gv.gui.haxes],'xlim',gv.dat.xl);
-    return;
-end
-% slide up ----------------------------------------------
-if double(action)==30 % up
-    yl = get(gca,'ylim');
-    newyl = yl+diff(yl)*0.1;
-    gv.dat.yl = newyl;
-    set([gv.gui.haxes],'ylim',gv.dat.yl);
-    return;
-end
-% slide down --------------------------------------------------
-if double(action)==31 % down
-    xl = get(gca,'ylim');
-    newyl = xl-diff(xl)*0.1;
-    gv.dat.yl = newyl;
-    set([gv.gui.haxes],'ylim',gv.dat.yl);
-    return;
-end
-% save PDF file ------------------------------------------------
-if strcmp(action,'p')
-    [f,p] = uiputfile([gv.dat.pth filesep '*.pdf']);
-    set(gcf,'renderer','painters','PaperOrientation','landscape','PaperUnits','normalized','PaperPosition',[0 0 1 1])
-    print([p f],'-dpdf');
-    return;
-end
-% help --------------------------------------------------
-if strcmp(action,'h')
-    msg = {
-    'i ... zoom in horizontal'
-    'o ... zoom out horizontal'
-    'u ... zoom in vertical'
-    'j ... zoom out vertical'
-    'right ... slide to right'
-    'left ... slide to left'
-    'up ... slide to upper'
-    'down ... slide to lower'
-    'p ... save PDF file'
-    'h ... help'
-    };
-    msgbox(msg,'Key Command List');    
-    return;
-end
-% for other things --------------------------------------
-if length(action)==1
-    return;
-end
-% for internal functions --------------------------------------
-if length(action)>5
-    varargout{1} = eval(['@' action]);
-    return;
-end
-% ////////////////////////////////////////////////////////////////////////
-function drawmtsp
-global gv;
+% msgbox('Done!');
+return;
 
-set(0,'CurrentFigure',gv.gui.hfig);
-set(gv.gui.hfig,'CurrentAxes',gv.gui.haxes(1));
-imagesc(gv.dat.tvec,gv.dat.fvec/1000,gv.dat.mtsp);  axis xy
-set(gca,'tickdir','out'); box off
-ylabel('Frequency (kHz)');
-colormap(flipud(gray));
-caxis(gv.dat.mtsimrng);
-set(gv.gui.haxes,'xlim',gv.dat.xl,'ylim',gv.dat.yl);
-drawnow;
-% ////////////////////////////////////////////////////////////////////////
-function drawfltnd
-global gv;
-% fetch
-fetchparams;    
-freqmin = gv.prm.freqmin;
-freqmax = gv.prm.freqmax;
-fvec = gv.dat.fvec;
-tvec = gv.dat.tvec;
-fltnd = gv.dat.fltnd;
-fltndimrng = gv.dat.fltndimrng;
-% draw
-set(0,'CurrentFigure',gv.gui.hfig);
-set(gv.gui.hfig,'CurrentAxes',gv.gui.haxes(2));
-imagesc(tvec,fvec/1000,fltnd); axis xy
-set(gca,'tickdir','out'); box off;
-caxis(fltndimrng);
-hls = line([min(tvec) max(tvec); min(tvec) max(tvec)]',[freqmax freqmax;freqmin freqmin]'/1000); set(hls,'color','r','linestyle','--');
-ylabel('Frequency (kHz)');
-set(gv.gui.haxes,'xlim',gv.dat.xl,'ylim',gv.dat.yl);
-drawnow;
-% ////////////////////////////////////////////////////////////////////////
-function drawtrace
-global gv;
-% fetch
-fvec = gv.dat.fvec;
-tvec = gv.dat.tvec;
-fltnd = gv.dat.fltnd;
-fltndimrng = gv.dat.fltndimrng;
-freqtrace = gv.dat.freqtrace;
-onoffset = gv.dat.onoffset;
-onoffsetm = gv.dat.onoffsetm;
-maxampidx = gv.dat.maxampidx;
-maxfreq = gv.dat.maxfreq;
-margin = gv.prm.margin;
-fs = gv.dat.fs;
-% draw
-set(0,'CurrentFigure',gv.gui.hfig);
-set(gv.gui.hfig,'CurrentAxes',gv.gui.haxes(3));
-imagesc(tvec,fvec/1000,fltnd); axis xy
-if ~isempty(onoffset)
-    nonsylzone = [[0 onoffsetm(1,1)]; [onoffsetm(1:end-1,2) onoffsetm(2:end,1)]; [onoffsetm(end,2) max(tvec)]];
-    temp = [[onoffset(:,1)-margin onoffset(:,1)]; [onoffset(:,2) onoffset(:,2)+margin]];
-    [~,sid] = sort(temp(:,1));
-    margzone = temp(sid,:);
-    idx = find((margzone(2:end,1)-margzone(1:end-1,2))>0);
-    ons = [margzone(1,1);margzone(idx+1)];
-    offs = [margzone(idx,2);margzone(end,2)];
-    margzone = [ons offs];
-else
-    nonsylzone = [0 tvec(end)];
-    margzone = [0 0];
-end
-set(0,'CurrentFigure',gv.gui.hfig);
-set(gv.gui.hfig,'CurrentAxes',gv.gui.haxes(3));
-hp1 = patch(margzone(:,[1 2 2 1])',repmat([0 0 fs fs]/2000,size(margzone,1),1)',1);
-hp2 = patch(nonsylzone(:,[1 2 2 1])',repmat([0 0 fs fs]/2000,size(nonsylzone,1),1)',1);
-set(hp1,'linestyle','none','facecolor','k','facealpha',0.1);
-set(hp2,'linestyle','none','facecolor','k','facealpha',0.3);
-hlf = line(tvec,freqtrace(:,1:3)/1000);
-set(hlf,'linestyle','none','marker','.','color','b');
-hlm = line(tvec(maxampidx),maxfreq/1000);
-set(hlm,'linestyle','none','marker','+','color','r');
-colormap(gca,flipud(gray));
-caxis(fltndimrng);
-set(gca,'tickdir','out'); box off;
-ylabel('Frequency (kHz)');
-xlabel('Time (s)');
-set(gv.gui.haxes,'xlim',gv.dat.xl,'ylim',gv.dat.yl);    
-drawnow;
-% ////////////////////////////////////////////////////////////////////////
-function makegui
-global gv
-% figure
-hfig = figure;
-set(hfig,'MenuBar','none','NumberTitle','off','ToolBar','none','Name',gv.usevsegver);
-set(hfig,'KeyPressFcn','usvseg09r2_absthresh(get(gcf,''CurrentCharacter''));');
-set(hfig,'DeleteFcn',@finishfunc);
-% axes
-haxes(1) = axes;
-haxes(2) = axes;
-haxes(3) = axes;
-set(haxes,'tickdir','out')
-% uicontrol
-hpush_open = uicontrol(hfig,'style','pushbutton');
-hpush_flat = uicontrol(hfig,'style','pushbutton');
-hpush_thrs = uicontrol(hfig,'style','pushbutton');
-hpush_dtct = uicontrol(hfig,'style','pushbutton');
-hpush_save = uicontrol(hfig,'style','pushbutton');
-hpush_sgmt = uicontrol(hfig,'style','pushbutton');
-hpush_play = uicontrol(hfig,'style','pushbutton');
-hpush_swav = uicontrol(hfig,'style','pushbutton');
-hpush_long = uicontrol(hfig,'style','pushbutton');
-hpush_fldr = uicontrol(hfig,'style','pushbutton');
-hedit_step = uicontrol(hfig,'style','edit');
-hedit_fmin = uicontrol(hfig,'style','edit');
-hedit_fmax = uicontrol(hfig,'style','edit');
-hedit_thre = uicontrol(hfig,'style','edit');
-hedit_dmin = uicontrol(hfig,'style','edit');
-hedit_dmax = uicontrol(hfig,'style','edit');
-hedit_gmin = uicontrol(hfig,'style','edit');
-hedit_marg = uicontrol(hfig,'style','edit');
-htggl_wavo = uicontrol(hfig,'style','toggle');
-htggl_imgo = uicontrol(hfig,'style','toggle');
-htggl_imgt = uicontrol(hfig,'style','toggle');
-htggl_trac = uicontrol(hfig,'style','toggle');
-hedit_read = uicontrol(hfig,'style','edit');
-hedit_mapL = uicontrol(hfig,'style','edit');
-hedit_mapH = uicontrol(hfig,'style','edit');
-htext_fnam = uicontrol(hfig,'style','text');
-htext_fslb = uicontrol(hfig,'style','text');
-htext_fsvl = uicontrol(hfig,'style','text');
-htext_step = uicontrol(hfig,'style','text');
-htext_fmin = uicontrol(hfig,'style','text');
-htext_fmax = uicontrol(hfig,'style','text');
-htext_dmin = uicontrol(hfig,'style','text');
-htext_dmax = uicontrol(hfig,'style','text');
-htext_gmin = uicontrol(hfig,'style','text');
-htext_thre = uicontrol(hfig,'style','text');
-htext_marg = uicontrol(hfig,'style','text');
-htext_wavo = uicontrol(hfig,'style','text');
-htext_imgo = uicontrol(hfig,'style','text');
-htext_imgt = uicontrol(hfig,'style','text');
-htext_trac = uicontrol(hfig,'style','text');
-htext_maps = uicontrol(hfig,'style','text');
-htext_read = uicontrol(hfig,'style','text');
-% busy mark
-hpanl_busy = uipanel(hfig);
-set(hpanl_busy,'backgroundcolor',[0.6 0.6 0.6]);
-% strings
-set(hpush_open,'string','open');
-set(hpush_flat,'string','flatten');
-set(hpush_thrs,'string','threshold');
-set(hpush_dtct,'string','detect');
-set(hpush_save,'string','save csv');
-set(hpush_sgmt,'string','segment');
-set(hpush_play,'string','play');
-set(hpush_swav,'string','save');
-set(hpush_long,'string','long file');
-set(hpush_fldr,'string','multiple files');
-set(htext_fnam,'string','');
-set(hedit_step,'string',num2str(gv.prm.timestep*1000));
-set(hedit_fmin,'string',num2str(gv.prm.freqmin/1000));
-set(hedit_fmax,'string',num2str(gv.prm.freqmax/1000));
-set(hedit_thre,'string',num2str(gv.prm.threshval));
-set(hedit_dmin,'string',num2str(gv.prm.durmin*1000));
-set(hedit_dmax,'string',num2str(gv.prm.durmax*1000));
-set(hedit_gmin,'string',num2str(gv.prm.gapmin*1000));
-set(hedit_marg,'string',num2str(gv.prm.margin*1000));
-set(hedit_read,'string',num2str(gv.prm.readsize));
-set(hedit_mapL,'string',num2str(gv.prm.mapL/1000));
-set(hedit_mapH,'string',num2str(gv.prm.mapH/1000));
-set(htext_fslb,'string',{'sampling', '(kHz)'});
-set(htext_fsvl,'string','-');
-set(htext_step,'string',{'time step','(ms)'});
-set(htext_fmin,'string',{'freq min','(kHz)'});
-set(htext_fmax,'string',{'freq max','(kHz)'});
-set(htext_thre,'string',{'threshold','(val)'});
-set(htext_dmin,'string',{'dur min','(ms)'});
-set(htext_dmax,'string',{'dur max','(ms)'});
-set(htext_gmin,'string',{'gap min','(ms)'});
-set(htext_marg,'string',{'margin','(ms)'});
-set(htext_wavo,'string',{'wavfile','output'});
-set(htext_imgo,'string',{'image','output'});
-set(htext_imgt,'string',{'image','type'});
-set(htext_trac,'string',{'trace','output'});
-set(htext_maps,'string',{'map','(kHz)'});
-set(htext_read,'string',{'read size','(s)'});
-set(htext_fnam,'string','File: filename');
-% toggle
-str1 = {'off','on'};
-str2 = {'orig','flat'};
-set(htggl_wavo,'value',gv.prm.wavfileoutput,'string',str1{gv.prm.wavfileoutput+1});
-set(htggl_imgo,'value',gv.prm.imageoutput,'string',str1{gv.prm.imageoutput+1});
-set(htggl_imgt,'value',gv.prm.imagetype,'string',str2{gv.prm.imagetype+1});
-set(htggl_trac,'value',gv.prm.traceoutput,'string',str1{gv.prm.traceoutput+1});
-set(htggl_wavo,'callback','str={''off'',''on''};    set(gco,''string'',str{get(gco,''value'')+1});');
-set(htggl_imgo,'callback','str={''off'',''on''};    set(gco,''string'',str{get(gco,''value'')+1});');
-set(htggl_imgt,'callback','str={''orig'',''flat''}; set(gco,''string'',str{get(gco,''value'')+1});');
-set(htggl_trac,'callback','str={''off'',''on''};    set(gco,''string'',str{get(gco,''value'')+1});');
-% callbacks
-set(hpush_open,'callback','usvseg09r2_absthresh(''open'');');
-set(hpush_flat,'callback','usvseg09r2_absthresh(''flat'');');
-set(hpush_thrs,'callback','usvseg09r2_absthresh(''thrs'');');
-set(hpush_dtct,'callback','usvseg09r2_absthresh(''dtct'');');
-set(hpush_save,'callback','usvseg09r2_absthresh(''save'');');
-set(hpush_sgmt,'callback','usvseg09r2_absthresh(''sgmt'');');
-set(hpush_play,'callback','usvseg09r2_absthresh(''play'');');
-set(hpush_swav,'callback','usvseg09r2_absthresh(''swav'');');
-set(hpush_long,'callback','usvseg09r2_absthresh(''long'');');
-set(hpush_fldr,'callback','usvseg09r2_absthresh(''fldr'');');
-% text set
-set(htext_fnam,'horizontalalign','left');
-% set position
-set(hfig,'position',[10 80 1000 750]);
-hts = [htext_fslb,htext_step,htext_fmin,htext_fmax,htext_thre,htext_dmin,htext_dmax,htext_gmin,htext_marg,htext_wavo,htext_imgo,htext_imgt,htext_trac,htext_read];
-hed = [htext_fsvl,hedit_step,hedit_fmin,hedit_fmax,hedit_thre,hedit_dmin,hedit_dmax,hedit_gmin,hedit_marg,htggl_wavo,htggl_imgo,htggl_imgt,htggl_trac,hedit_read];
-for n=1:length(hts)
-    set(hts(n),'units','normalized','position',[0.02 0.94-(n-1)*0.035 0.06 0.035]);
-    set(hed(n),'units','normalized','position',[0.08 0.94-(n-1)*0.035 0.04 0.035]);
-end
-set(hpush_open,'units','normalized','position',[0.02 0.42 0.10 0.04]);
-set(hpush_flat,'units','normalized','position',[0.02 0.38 0.10 0.04]);
-set(hpush_thrs,'units','normalized','position',[0.02 0.34 0.10 0.04]);
-set(hpush_dtct,'units','normalized','position',[0.02 0.30 0.10 0.04]);
-set(hpush_save,'units','normalized','position',[0.02 0.26 0.10 0.04]);
-set(hpush_sgmt,'units','normalized','position',[0.02 0.22 0.10 0.04]);
-set(htext_maps,'units','normalized','position',[0.02 0.16 0.04 0.04]);
-set(hedit_mapL,'units','normalized','position',[0.06 0.16 0.03 0.04]);
-set(hedit_mapH,'units','normalized','position',[0.09 0.16 0.03 0.04]);
-set(hpush_play,'units','normalized','position',[0.02 0.12 0.05 0.04]);
-set(hpush_swav,'units','normalized','position',[0.07 0.12 0.05 0.04]);
-set(hpush_long,'units','normalized','position',[0.02 0.06 0.10 0.04]);
-set(hpush_fldr,'units','normalized','position',[0.02 0.02 0.10 0.04]);
-% filename and axis
-set(hpanl_busy,'units','normalized','position',[0.175 0.955 0.02 0.025]);
-set(htext_fnam,'units','normalized','position',[0.20 0.96 0.77 0.02]);
-set(haxes(1), 'units','normalized','position',[0.20 0.68 0.77 0.25]);
-set(haxes(2), 'units','normalized','position',[0.20 0.38 0.77 0.25]);
-set(haxes(3), 'units','normalized','position',[0.20 0.08 0.77 0.25]);
-% disable
-set(hpush_open,'enable','on');
-set(hpush_flat,'enable','off');
-set(hpush_thrs,'enable','off');
-set(hpush_dtct,'enable','off');
-set(hpush_save,'enable','off');
-set(hpush_sgmt,'enable','off');
-set(hpush_play,'enable','off');
-set(hpush_swav,'enable','off');
-set(hpush_long,'enable','on');
-set(hpush_fldr,'enable','on');
-% save handles
-gv.gui.hfig = hfig;
-gv.gui.haxes = haxes;
-gv.gui.hpush_open = hpush_open;
-gv.gui.hpush_flat = hpush_flat;
-gv.gui.hpush_thrs = hpush_thrs;
-gv.gui.hpush_dtct = hpush_dtct;
-gv.gui.hpush_save = hpush_save;
-gv.gui.hpush_sgmt = hpush_sgmt;
-gv.gui.hpush_play = hpush_play;
-gv.gui.hpush_swav = hpush_swav;
-gv.gui.hpush_long = hpush_long;
-gv.gui.hpush_fldr = hpush_fldr;
-gv.gui.htext_fnam = htext_fnam;
-gv.gui.htext_fsvl = htext_fsvl;
-gv.gui.hedit_step = hedit_step;
-gv.gui.hedit_fmin = hedit_fmin;
-gv.gui.hedit_fmax = hedit_fmax;
-gv.gui.hedit_thre = hedit_thre;
-gv.gui.hedit_dmin = hedit_dmin;
-gv.gui.hedit_dmax = hedit_dmax;
-gv.gui.hedit_gmin = hedit_gmin;
-gv.gui.hedit_marg = hedit_marg;
-gv.gui.hedit_read = hedit_read;
-gv.gui.hedit_mapL = hedit_mapL;
-gv.gui.hedit_mapH = hedit_mapH;
-gv.gui.htggl_wavo = htggl_wavo;
-gv.gui.htggl_imgo = htggl_imgo;
-gv.gui.htggl_imgt = htggl_imgt;
-gv.gui.htggl_trac = htggl_trac;
-gv.gui.hpanl_busy = hpanl_busy;
-% delete function
-function finishfunc(~,~)
-global gv
-prmname = [fileparts(mfilename('fullpath')) filesep 'usvseg_prm_absthresh.mat'];
-fetchparams;
-prm = gv.prm;
-save(prmname,'prm');
-clearvars -global gv;
-disp('bye!')
-% ////////////////////////////////////////////////////////////////////////
-function busytoggle(num)
-global gv
-if num==1
-    set(gv.gui.hpanl_busy,'backgroundcolor',[1 0 0]);
-    drawnow;
-else
-    set(gv.gui.hpanl_busy,'backgroundcolor',[0 1 0]);
-    drawnow;
-end 
 
-% ////////////////////////////////////////////////////////////////////////
-function fetchparams
-global gv
-prm.fftsize = gv.prm.fftsize;
-prm.timestep = str2num(get(gv.gui.hedit_step,'string'))/1000;
-prm.freqmin = str2num(get(gv.gui.hedit_fmin,'string'))*1000;
-prm.freqmax = str2num(get(gv.gui.hedit_fmax,'string'))*1000;
-prm.threshval = str2num(get(gv.gui.hedit_thre,'string'));
-prm.durmin = str2num(get(gv.gui.hedit_dmin,'string'))/1000;
-prm.durmax = str2num(get(gv.gui.hedit_dmax,'string'))/1000;
-prm.gapmin = str2num(get(gv.gui.hedit_gmin,'string'))/1000;
-prm.margin = str2num(get(gv.gui.hedit_marg,'string'))/1000;
-prm.wavfileoutput= get(gv.gui.htggl_wavo,'value');
-prm.imageoutput = get(gv.gui.htggl_imgo,'value');
-prm.imagetype = get(gv.gui.htggl_imgt,'value');
-prm.traceoutput = get(gv.gui.htggl_trac,'value');
-prm.readsize = str2num(get(gv.gui.hedit_read,'string'));
-prm.mapL = str2num(get(gv.gui.hedit_mapL,'string'))*1000;
-prm.mapH = str2num(get(gv.gui.hedit_mapH,'string'))*1000;
-gv.prm = prm;
+
+
+
+%% util functions
 
 % ////////////////////////////////////////////////////////////////////////
 function [mtsp,fltnd,onoffset,onoffsetm,freqtrace,amptrace,maxampval,maxampidx,maxfreq,meanfreq,cvfreq,thresh,med,contflg] = procfun(wav,fs,fftsize,params,med,thresh)
