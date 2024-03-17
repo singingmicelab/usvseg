@@ -1,4 +1,4 @@
-function usvseg09r2_absthresh_cli_multi(audio_dir, params_filepath)
+function usvseg09r2_absthresh_cli_multi(audio_dir, params_filepath, output_dir)
 % 
 % usvseg09r2_absthresh_cli_multi
 % Command line version of usvseg Multiple Files with absolute threshold value
@@ -34,6 +34,7 @@ fltflg = gv.prm.imagetype; trcflg = gv.prm.traceoutput;
 readsize = gv.prm.readsize; fftsize = gv.prm.fftsize;
 % get reading path and files
 pth = audio_dir;
+output_pth = output_dir;
 gv.dat.pth = pth;
 d = dir([pth filesep '*.wav']);
 fns = {d.name};
@@ -54,7 +55,7 @@ for f=1:nfile
     % CSV setting
     [~,prefix,~] = fileparts(fns{f});
     sfn = [prefix '_dat.csv'];
-    savefp = [pth filesep sfn];
+    savefp = [output_pth filesep sfn];
     fid = fopen(savefp,'wt');
     fprintf(fid,'#,start,end,duration,maxfreq,maxamp,meanfreq,cvfreq\n');
     fclose(fid);
